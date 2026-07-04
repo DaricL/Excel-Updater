@@ -260,7 +260,7 @@ class App:
         self.config["output_suffix"] = self.suffix_var.get()
         save_config(self.config)
 
-    # ---------- 核心执行 ----------
+    # ---------- 核心执行（增强调试） ----------
     def run_update(self):
         self.save_current_config()
         cfg = self.config
@@ -309,58 +309,77 @@ class App:
                     f"映射 {i+1}:\n源 {m['source_cell']} → 目标 {m['target_cell']}\n错误：{e}")
                 return
 
-        # ----- 图片插入 -----
+        # ----- 图片插入（带详细反馈） -----
+        inserted_count = 0
+        skipped_details = []  # 记录跳过的原因
         for i, m in enumerate(cfg.get("image_mappings", [])):
             try:
                 number = m["image_number"]
                 folder = Path(m["image_folder"])
+
+                # 检查文件夹是否存在且确实为文件夹
                 if not folder.exists():
-                    messagebox.showerror("图片文件夹不存在", f"映射 {i+1}：文件夹路径不存在\n{folder}")
+                    skipped_details.append(f"映射{i+1}: 文件夹不存在 {folder}")
+                    continue
+                if not folder.is_dir():
+                    skipped_details.append(f"映射{i+1}: 路径不是文件夹 {folder}")
                     continue
 
-                # 查找图片（忽略扩展名大小写，列出文件夹内容帮助诊断）
-                img_path = None
-                # 先构建完整目录的文件列表（小写映射）
+                # 列出文件夹内所有文件名（用于匹配和调试）
                 folder_files = {}
-                for f in folder.iterdir():
-                    if f.is_file():
-                        folder_files[f.name.lower()] = f.name  # 保留原始大小写
+                try:
+                    for f in folder.iterdir():
+                        if f.is_file():
+                            folder_files[f.name.lower()] = f.name
+                except Exception as e:
+                    skipped_details.append(f"映射{i+1}: 无法读取文件夹 {folder}，错误: {e}")
+                    continue
+
+                if not folder_files:
+                    skipped_details.append(f"映射{i+1}: 文件夹为空 {folder}")
+                    continue
+
+                # 查找图片（忽略扩展名大小写）
+                img_path = None
+                matched_name = None
                 for ext in [".jpg", ".jpeg", ".png", ".bmp", ".gif"]:
                     candidate_name = f"{number}{ext}".lower()
                     if candidate_name in folder_files:
-                        img_path = str(folder / folder_files[candidate_name])
+                        matched_name = folder_files[candidate_name]
+                        img_path = str(folder / matched_name)
                         break
 
                 if img_path is None:
-                    # 准备文件夹内容列表用于 debug
-                    file_list = "\n".join(sorted(folder_files.values())[:20])
-                    if len(folder_files) > 20:
-                        file_list += f"\n... (共 {len(folder_files)} 个文件)"
-                    messagebox.showwarning("图片未找到",
-                        f"图片映射 {i+1}：\n"
-                        f"在文件夹:\n{folder}\n"
-                        f"中未找到编号为 '{number}' 的图片文件（支持 .jpg/.jpeg/.png/.bmp/.gif）\n\n"
-                        f"文件夹内前 20 个文件名为:\n{file_list}")
+                    file_list = "\n".join(sorted(folder_files.values())[:15])
+                    skipped_details.append(f"映射{i+1}: 未找到编号 '{number}' 的图片\n文件夹内容(前15个):\n{file_list}")
                     continue
 
-                # 目标单元格
+                # 目标单元格检查
                 if "!" not in m["target_cell"]:
-                    raise ValueError("目标单元格格式错误，缺少 '!'")
+                    skipped_details.append(f"映射{i+1}: 目标单元格格式错误 (缺少'!')")
+                    continue
                 tgt_sh, tgt_cell = m["target_cell"].split("!", 1)
                 if tgt_sh not in wb.sheetnames:
-                    raise KeyError(f"模板中不存在工作表：'{tgt_sh}'\n可用工作表：{wb.sheetnames}")
+                    skipped_details.append(f"映射{i+1}: 模板中不存在工作表 '{tgt_sh}'")
+                    continue
 
+                # 插入图片
                 ws_tgt = wb[tgt_sh]
                 img = XLImage(img_path)
                 img.width = m["width_cm"]
                 img.height = m["height_cm"]
                 ws_tgt.add_image(img, tgt_cell)
+                inserted_count += 1
+
             except Exception as e:
                 wb_src.close()
                 wb.close()
                 messagebox.showerror("图片插入出错",
                     f"图片映射 {i+1}:\n编号 {m['image_number']}，目标 {m['target_cell']}\n错误：{e}")
                 return
+
+        # 保存前关闭数据源
+        wb_src.close()
 
         # 保存新文件
         tpl_path = Path(cfg["template_path"])
@@ -369,18 +388,29 @@ class App:
         try:
             wb.save(str(out_path))
         except Exception as e:
-            wb_src.close()
             wb.close()
             messagebox.showerror("保存失败", str(e))
             return
 
-        wb_src.close()
         wb.close()
+
+        # 调试反馈
+        summary = f"数据映射: {len(cfg.get('data_mappings', []))} 条\n"
+        summary += f"图片映射: {len(cfg.get('image_mappings', []))} 条\n"
+        summary += f"成功插入图片: {inserted_count} 张\n"
+        if skipped_details:
+            summary += "\n未插入图片原因:\n" + "\n\n".join(skipped_details)
+        else:
+            summary += "\n所有图片均已插入。"
+
+        messagebox.showinfo("执行结果", summary)
+
+        # 自动打开
         try:
             os.startfile(out_path)
         except Exception:
             pass
-        messagebox.showinfo("完成", f"报告已生成:\n{out_path}")
+        messagebox.showinfo("文件位置", f"报告已生成:\n{out_path}")
 
 if __name__ == "__main__":
     root = tk.Tk()
