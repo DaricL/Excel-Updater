@@ -27,7 +27,7 @@ def load_config():
             "template_path": "",
             "output_suffix": "_已更新",
             "data_mappings": [],
-            "image_mappings": [] 
+            "image_mappings": []
         }
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -36,7 +36,7 @@ class App:
     def __init__(self, root):
         self.root = root
         self.root.title("Excel报告一键更新器")
-        self.root.geometry("900x700")
+        self.root.geometry("950x720")
         self.config = load_config()
 
         # ---------- 基础路径 ----------
@@ -61,6 +61,7 @@ class App:
         nb = ttk.Notebook(root)
         nb.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
+        # ---- 数据映射页 ----
         frm_data = ttk.Frame(nb)
         nb.add(frm_data, text="数据映射")
         self.data_tree = ttk.Treeview(frm_data, columns=("source", "target"), show="headings", height=8)
@@ -70,8 +71,10 @@ class App:
         btn_frm_data = ttk.Frame(frm_data)
         btn_frm_data.pack(fill=tk.X, padx=5, pady=2)
         ttk.Button(btn_frm_data, text="添加", command=self.add_data_mapping).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frm_data, text="编辑选中", command=self.edit_data_mapping).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frm_data, text="删除选中", command=lambda: self.delete_selected(self.data_tree, "data")).pack(side=tk.LEFT, padx=5)
 
+        # ---- 图片映射页 ----
         frm_img = ttk.Frame(nb)
         nb.add(frm_img, text="图片映射")
         self.img_tree = ttk.Treeview(frm_img, columns=("number", "folder", "target", "width", "height"), show="headings", height=8)
@@ -89,6 +92,7 @@ class App:
         btn_frm_img = ttk.Frame(frm_img)
         btn_frm_img.pack(fill=tk.X, padx=5, pady=2)
         ttk.Button(btn_frm_img, text="添加", command=self.add_image_mapping).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frm_img, text="编辑选中", command=self.edit_image_mapping).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frm_img, text="删除选中", command=lambda: self.delete_selected(self.img_tree, "image")).pack(side=tk.LEFT, padx=5)
 
         ttk.Button(root, text="一键更新报告", command=self.run_update).pack(pady=10)
@@ -96,6 +100,7 @@ class App:
         self.refresh_data_tree()
         self.refresh_image_tree()
 
+    # ---------- 路径浏览 ----------
     def browse_src(self):
         path = filedialog.askopenfilename(filetypes=[("Excel文件", "*.xlsx")])
         if path:
@@ -106,15 +111,31 @@ class App:
         if path:
             self.tpl_path_var.set(path)
 
+    # ---------- 数据映射操作 ----------
     def add_data_mapping(self):
+        self._data_dialog(None)
+
+    def edit_data_mapping(self):
+        selected = self.data_tree.selection()
+        if not selected:
+            messagebox.showinfo("提示", "请先选择一条映射")
+            return
+        idx = self.data_tree.index(selected[0])
+        item = self.config["data_mappings"][idx]
+        self._data_dialog(idx, item)
+
+    def _data_dialog(self, edit_idx, item=None):
         popup = tk.Toplevel(self.root)
-        popup.title("添加数据映射")
+        popup.title("编辑数据映射" if item else "添加数据映射")
         ttk.Label(popup, text="源单元格 (如 Sheet1!B2):").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
         src_entry = ttk.Entry(popup, width=35)
         src_entry.grid(row=0, column=1, padx=5, pady=5)
         ttk.Label(popup, text="目标单元格 (如 Sheet1!D5):").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
         tgt_entry = ttk.Entry(popup, width=35)
         tgt_entry.grid(row=1, column=1, padx=5, pady=5)
+        if item:
+            src_entry.insert(0, item["source_cell"])
+            tgt_entry.insert(0, item["target_cell"])
 
         def save():
             src = src_entry.get().strip()
@@ -122,22 +143,14 @@ class App:
             if not src or not tgt:
                 messagebox.showwarning("输入不完整", "两个单元格都不能为空")
                 return
-            self.config.setdefault("data_mappings", []).append({"source_cell": src, "target_cell": tgt})
+            new_map = {"source_cell": src, "target_cell": tgt}
+            if edit_idx is not None:
+                self.config["data_mappings"][edit_idx] = new_map
+            else:
+                self.config.setdefault("data_mappings", []).append(new_map)
             self.refresh_data_tree()
             popup.destroy()
         ttk.Button(popup, text="确定", command=save).grid(row=2, column=0, columnspan=2, pady=10)
-
-    def delete_selected(self, tree, map_type):
-        selected = tree.selection()
-        if not selected:
-            return
-        idx = tree.index(selected[0])
-        if map_type == "data":
-            del self.config["data_mappings"][idx]
-            self.refresh_data_tree()
-        else:
-            del self.config["image_mappings"][idx]
-            self.refresh_image_tree()
 
     def refresh_data_tree(self):
         for i in self.data_tree.get_children():
@@ -145,9 +158,22 @@ class App:
         for m in self.config.get("data_mappings", []):
             self.data_tree.insert("", tk.END, values=(m["source_cell"], m["target_cell"]))
 
+    # ---------- 图片映射操作 ----------
     def add_image_mapping(self):
+        self._image_dialog(None)
+
+    def edit_image_mapping(self):
+        selected = self.img_tree.selection()
+        if not selected:
+            messagebox.showinfo("提示", "请先选择一条映射")
+            return
+        idx = self.img_tree.index(selected[0])
+        item = self.config["image_mappings"][idx]
+        self._image_dialog(idx, item)
+
+    def _image_dialog(self, edit_idx, item=None):
         popup = tk.Toplevel(self.root)
-        popup.title("添加图片映射")
+        popup.title("编辑图片映射" if item else "添加图片映射")
         ttk.Label(popup, text="图片编号 (用于匹配文件名):").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
         num_entry = ttk.Entry(popup, width=30)
         num_entry.grid(row=0, column=1, padx=5, pady=5)
@@ -161,12 +187,20 @@ class App:
         tgt_entry.grid(row=2, column=1, padx=5, pady=5)
         ttk.Label(popup, text="宽度 (cm):").grid(row=3, column=0, padx=5, pady=5, sticky=tk.W)
         w_entry = ttk.Entry(popup, width=10)
-        w_entry.insert(0, "3.5")
         w_entry.grid(row=3, column=1, sticky=tk.W, padx=5)
         ttk.Label(popup, text="高度 (cm):").grid(row=4, column=0, padx=5, pady=5, sticky=tk.W)
         h_entry = ttk.Entry(popup, width=10)
-        h_entry.insert(0, "2.8")
         h_entry.grid(row=4, column=1, sticky=tk.W, padx=5)
+
+        if item:
+            num_entry.insert(0, item["image_number"])
+            folder_var.set(item["image_folder"])
+            tgt_entry.insert(0, item["target_cell"])
+            w_entry.insert(0, str(item["width_cm"]))
+            h_entry.insert(0, str(item["height_cm"]))
+        else:
+            w_entry.insert(0, "3.5")
+            h_entry.insert(0, "2.8")
 
         def save():
             num = num_entry.get().strip()
@@ -181,13 +215,17 @@ class App:
             if not num or not folder or not tgt:
                 messagebox.showwarning("输入不完整", "所有字段必填")
                 return
-            self.config.setdefault("image_mappings", []).append({
+            new_map = {
                 "image_number": num,
                 "image_folder": folder,
                 "target_cell": tgt,
                 "width_cm": w,
                 "height_cm": h
-            })
+            }
+            if edit_idx is not None:
+                self.config["image_mappings"][edit_idx] = new_map
+            else:
+                self.config.setdefault("image_mappings", []).append(new_map)
             self.refresh_image_tree()
             popup.destroy()
         ttk.Button(popup, text="确定", command=save).grid(row=5, column=0, columnspan=3, pady=10)
@@ -204,12 +242,25 @@ class App:
                 m["height_cm"]
             ))
 
+    def delete_selected(self, tree, map_type):
+        selected = tree.selection()
+        if not selected:
+            return
+        idx = tree.index(selected[0])
+        if map_type == "data":
+            del self.config["data_mappings"][idx]
+            self.refresh_data_tree()
+        else:
+            del self.config["image_mappings"][idx]
+            self.refresh_image_tree()
+
     def save_current_config(self):
         self.config["data_source_path"] = self.src_path_var.get()
         self.config["template_path"] = self.tpl_path_var.get()
         self.config["output_suffix"] = self.suffix_var.get()
         save_config(self.config)
 
+    # ---------- 核心执行 ----------
     def run_update(self):
         self.save_current_config()
         cfg = self.config
@@ -233,7 +284,7 @@ class App:
             wb_src.close()
             return
 
-        # ===== 数据写入 =====
+        # ----- 数据写入 -----
         for i, m in enumerate(cfg.get("data_mappings", [])):
             try:
                 if "!" not in m["source_cell"]:
@@ -258,22 +309,41 @@ class App:
                     f"映射 {i+1}:\n源 {m['source_cell']} → 目标 {m['target_cell']}\n错误：{e}")
                 return
 
-        # ===== 图片插入 =====
+        # ----- 图片插入 -----
         for i, m in enumerate(cfg.get("image_mappings", [])):
             try:
                 number = m["image_number"]
                 folder = Path(m["image_folder"])
-                img_path = None
-                for ext in [".jpg", ".jpeg", ".png", ".bmp", ".gif"]:
-                    candidate = folder / f"{number}{ext}"
-                    if candidate.exists():
-                        img_path = str(candidate)
-                        break
-                if img_path is None:
-                    messagebox.showwarning("图片未找到",
-                        f"图片映射 {i+1}：在文件夹\n{folder}\n中没有找到编号为 {number} 的图片文件")
+                if not folder.exists():
+                    messagebox.showerror("图片文件夹不存在", f"映射 {i+1}：文件夹路径不存在\n{folder}")
                     continue
 
+                # 查找图片（忽略扩展名大小写，列出文件夹内容帮助诊断）
+                img_path = None
+                # 先构建完整目录的文件列表（小写映射）
+                folder_files = {}
+                for f in folder.iterdir():
+                    if f.is_file():
+                        folder_files[f.name.lower()] = f.name  # 保留原始大小写
+                for ext in [".jpg", ".jpeg", ".png", ".bmp", ".gif"]:
+                    candidate_name = f"{number}{ext}".lower()
+                    if candidate_name in folder_files:
+                        img_path = str(folder / folder_files[candidate_name])
+                        break
+
+                if img_path is None:
+                    # 准备文件夹内容列表用于 debug
+                    file_list = "\n".join(sorted(folder_files.values())[:20])
+                    if len(folder_files) > 20:
+                        file_list += f"\n... (共 {len(folder_files)} 个文件)"
+                    messagebox.showwarning("图片未找到",
+                        f"图片映射 {i+1}：\n"
+                        f"在文件夹:\n{folder}\n"
+                        f"中未找到编号为 '{number}' 的图片文件（支持 .jpg/.jpeg/.png/.bmp/.gif）\n\n"
+                        f"文件夹内前 20 个文件名为:\n{file_list}")
+                    continue
+
+                # 目标单元格
                 if "!" not in m["target_cell"]:
                     raise ValueError("目标单元格格式错误，缺少 '!'")
                 tgt_sh, tgt_cell = m["target_cell"].split("!", 1)
