@@ -10,6 +10,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 try:
     from openpyxl import load_workbook
     from openpyxl.drawing.image import Image as XLImage
+    from openpyxl.utils.units import cm as cm_unit   # ← 关键：厘米转EMU
 except ImportError:
     messagebox.showerror("缺少库", "请先运行: pip install openpyxl")
     sys.exit(1)
@@ -260,7 +261,7 @@ class App:
         self.config["output_suffix"] = self.suffix_var.get()
         save_config(self.config)
 
-    # ---------- 核心执行（增强调试） ----------
+    # ---------- 核心执行（修复图片尺寸） ----------
     def run_update(self):
         self.save_current_config()
         cfg = self.config
@@ -309,52 +310,42 @@ class App:
                     f"映射 {i+1}:\n源 {m['source_cell']} → 目标 {m['target_cell']}\n错误：{e}")
                 return
 
-        # ----- 图片插入（带详细反馈） -----
+        # ----- 图片插入（已修复尺寸） -----
         inserted_count = 0
-        skipped_details = []  # 记录跳过的原因
+        skipped_details = []
         for i, m in enumerate(cfg.get("image_mappings", [])):
             try:
                 number = m["image_number"]
                 folder = Path(m["image_folder"])
 
-                # 检查文件夹是否存在且确实为文件夹
-                if not folder.exists():
-                    skipped_details.append(f"映射{i+1}: 文件夹不存在 {folder}")
-                    continue
-                if not folder.is_dir():
-                    skipped_details.append(f"映射{i+1}: 路径不是文件夹 {folder}")
+                if not folder.exists() or not folder.is_dir():
+                    skipped_details.append(f"映射{i+1}: 文件夹不存在或不是文件夹 {folder}")
                     continue
 
-                # 列出文件夹内所有文件名（用于匹配和调试）
+                # 列出文件用于匹配
                 folder_files = {}
-                try:
-                    for f in folder.iterdir():
-                        if f.is_file():
-                            folder_files[f.name.lower()] = f.name
-                except Exception as e:
-                    skipped_details.append(f"映射{i+1}: 无法读取文件夹 {folder}，错误: {e}")
-                    continue
+                for f in folder.iterdir():
+                    if f.is_file():
+                        folder_files[f.name.lower()] = f.name
 
                 if not folder_files:
                     skipped_details.append(f"映射{i+1}: 文件夹为空 {folder}")
                     continue
 
-                # 查找图片（忽略扩展名大小写）
+                # 查找图片
                 img_path = None
-                matched_name = None
                 for ext in [".jpg", ".jpeg", ".png", ".bmp", ".gif"]:
-                    candidate_name = f"{number}{ext}".lower()
-                    if candidate_name in folder_files:
-                        matched_name = folder_files[candidate_name]
-                        img_path = str(folder / matched_name)
+                    candidate = f"{number}{ext}".lower()
+                    if candidate in folder_files:
+                        img_path = str(folder / folder_files[candidate])
                         break
 
-                if img_path is None:
+                if not img_path:
                     file_list = "\n".join(sorted(folder_files.values())[:15])
-                    skipped_details.append(f"映射{i+1}: 未找到编号 '{number}' 的图片\n文件夹内容(前15个):\n{file_list}")
+                    skipped_details.append(f"映射{i+1}: 未找到编号 '{number}' 的图片\n文件夹内容(前15):\n{file_list}")
                     continue
 
-                # 目标单元格检查
+                # 检查目标单元格
                 if "!" not in m["target_cell"]:
                     skipped_details.append(f"映射{i+1}: 目标单元格格式错误 (缺少'!')")
                     continue
@@ -363,11 +354,11 @@ class App:
                     skipped_details.append(f"映射{i+1}: 模板中不存在工作表 '{tgt_sh}'")
                     continue
 
-                # 插入图片
+                # 插入图片（使用 cm_unit 转换尺寸）
                 ws_tgt = wb[tgt_sh]
                 img = XLImage(img_path)
-                img.width = m["width_cm"]
-                img.height = m["height_cm"]
+                img.width = cm_unit(m["width_cm"])    # 修复：厘米 → EMU
+                img.height = cm_unit(m["height_cm"])  # 修复：厘米 → EMU
                 ws_tgt.add_image(img, tgt_cell)
                 inserted_count += 1
 
@@ -378,7 +369,6 @@ class App:
                     f"图片映射 {i+1}:\n编号 {m['image_number']}，目标 {m['target_cell']}\n错误：{e}")
                 return
 
-        # 保存前关闭数据源
         wb_src.close()
 
         # 保存新文件
@@ -394,23 +384,18 @@ class App:
 
         wb.close()
 
-        # 调试反馈
+        # 结果反馈
         summary = f"数据映射: {len(cfg.get('data_mappings', []))} 条\n"
         summary += f"图片映射: {len(cfg.get('image_mappings', []))} 条\n"
         summary += f"成功插入图片: {inserted_count} 张\n"
         if skipped_details:
             summary += "\n未插入图片原因:\n" + "\n\n".join(skipped_details)
-        else:
-            summary += "\n所有图片均已插入。"
-
         messagebox.showinfo("执行结果", summary)
 
-        # 自动打开
         try:
             os.startfile(out_path)
         except Exception:
             pass
-        messagebox.showinfo("文件位置", f"报告已生成:\n{out_path}")
 
 if __name__ == "__main__":
     root = tk.Tk()
